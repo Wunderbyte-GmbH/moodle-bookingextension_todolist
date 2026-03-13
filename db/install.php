@@ -27,15 +27,5 @@
  * Custom code to be run on installing the plugin.
  */
 function xmldb_bookingextension_todolist_install() {
-    global $DB;
-
-    $dbman = $DB->get_manager();
-    $table = new xmldb_table('booking_options');
-    $field = new xmldb_field('todoliststatus', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'timemodified');
-
-    if (!$dbman->field_exists($table, $field)) {
-        $dbman->add_field($table, $field);
-    }
-
     return true;
 }

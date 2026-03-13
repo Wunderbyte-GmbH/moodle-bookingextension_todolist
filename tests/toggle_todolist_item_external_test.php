@@ -1,0 +1,245 @@
+<?php
+// This file is part of Moodle - http://moodle.org/
+//
+// Moodle is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Moodle is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+
+namespace bookingextension_todolist;
+
+use advanced_testcase;
+use bookingextension_todolist\external\toggle_todolist_item;
+use bookingextension_todolist\local\todolist_helper;
+use context_module;
+use mod_booking\singleton_service;
+use mod_booking_generator;
+use stdClass;
+
+/**
+ * Tests for external toggle endpoint.
+ *
+ * @package     bookingextension_todolist
+ * @category    test
+ * @covers      \bookingextension_todolist\external\toggle_todolist_item
+ * @covers      \bookingextension_todolist\todolist
+ * @runTestsInSeparateProcesses
+ * @copyright   2026 Wunderbyte GmbH
+ * @license     http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ */
+final class toggle_todolist_item_external_test extends advanced_testcase {
+    protected function setUp(): void {
+        parent::setUp();
+        $this->resetAfterTest();
+    }
+
+    public function tearDown(): void {
+        singleton_service::destroy_instance();
+        parent::tearDown();
+        /** @var mod_booking_generator $plugingenerator */
+        $plugingenerator = self::getDataGenerator()->get_plugin_generator('mod_booking');
+        $plugingenerator->teardown();
+    }
+
+    public function test_execute_checks_item_and_returns_success_notification(): void {
+        global $DB;
+
+        [$teacher, $optionid] = $this->create_teachercancheck_setup();
+        $itemid = $this->seed_single_item($optionid, 'Task A');
+
+        $this->setUser($teacher);
+        $this->set_valid_sesskey();
+        $sink = $this->redirectEvents();
+
+        $result = toggle_todolist_item::execute($itemid, $optionid, true);
+
+        $events = $sink->get_events();
+        $sink->close();
+
+        $record = $DB->get_record('bookingextension_todolist_item', ['id' => $itemid], '*', MUST_EXIST);
+        $this->assertSame(1, (int)$record->status);
+        $this->assertSame('success', $result['notificationtype']);
+        $this->assertNotEmpty($result['notification']);
+        $this->assertGreaterThanOrEqual(1, count($events));
+    }
+
+    public function test_execute_unchecks_item_and_returns_info_notification(): void {
+        global $DB;
+
+        [$teacher, $optionid] = $this->create_teachercancheck_setup();
+        $itemid = $this->seed_single_item($optionid, 'Task A', 1);
+
+        $this->setUser($teacher);
+        $this->set_valid_sesskey();
+
+        $result = toggle_todolist_item::execute($itemid, $optionid, false);
+
+        $record = $DB->get_record('bookingextension_todolist_item', ['id' => $itemid], '*', MUST_EXIST);
+        $this->assertSame(0, (int)$record->status);
+        $this->assertNull($record->completed_by);
+        $this->assertNull($record->completed_at);
+        $this->assertSame('info', $result['notificationtype']);
+        $this->assertNotEmpty($result['notification']);
+    }
+
+    public function test_execute_on_last_item_triggers_completed_history_entry(): void {
+        global $DB;
+
+        [$teacher, $optionid, $bookingid] = $this->create_teachercancheck_setup();
+        $firstitemid = $this->seed_single_item($optionid, 'Task A', 1);
+        $seconditemid = $this->seed_single_item($optionid, 'Task B', 0, 1);
+
+        $this->setUser($teacher);
+        $this->set_valid_sesskey();
+
+        $result = toggle_todolist_item::execute($seconditemid, $optionid, true);
+
+        $this->assertSame('success', $result['notificationtype']);
+        $this->assertStringContainsString('completed', strtolower($result['notification']));
+        $this->assertTrue(todolist_helper::todolist_completed($optionid));
+
+        $history = $DB->get_records('booking_history', ['bookingid' => $bookingid, 'optionid' => $optionid], 'id ASC');
+        $this->assertGreaterThanOrEqual(2, count($history));
+
+        $jsons = array_map(static fn($row) => (string)$row->json, $history);
+        $this->assertTrue((bool)array_filter($jsons, static fn($json) => strpos($json, 'toggle_todolist_item') !== false));
+        $this->assertTrue((bool)array_filter($jsons, static fn($json) => strpos($json, 'todolist_completed') !== false));
+
+        // Keep first item touched to avoid dead code style warnings in strict tools.
+        $this->assertGreaterThan(0, $firstitemid);
+    }
+
+    public function test_history_description_uses_real_item_text(): void {
+        [$teacher, $optionid, , $cmid] = $this->create_teachercancheck_setup();
+        $itemid = $this->seed_single_item($optionid, 'prepare classroom');
+
+        $values = (object)[
+            'cmid' => $cmid,
+            'optionid' => $optionid,
+            'usermodified' => $teacher->id,
+        ];
+
+        $description = todolist::get_booking_history_description($values, [
+            'component' => 'bookingextension_todolist',
+            'action' => 'toggle_todolist_item',
+            'itemid' => $itemid,
+            'checked' => 1,
+        ]);
+
+        $this->assertStringContainsString('prepare classroom', $description);
+        $this->assertStringNotContainsString('#' . $itemid, $description);
+        $this->assertStringContainsString('was completed', $description);
+
+        $uncheckeddescription = todolist::get_booking_history_description($values, [
+            'component' => 'bookingextension_todolist',
+            'action' => 'toggle_todolist_item',
+            'itemid' => $itemid,
+            'checked' => 0,
+        ]);
+
+        $this->assertStringContainsString('prepare classroom', $uncheckeddescription);
+        $this->assertStringContainsString('was uncompleted', $uncheckeddescription);
+    }
+
+    public function test_execute_throws_for_user_without_capability(): void {
+        [$teacher, $optionid, $bookingid, $cmid, $student] = $this->create_teachercancheck_setup_with_student();
+        $itemid = $this->seed_single_item($optionid, 'Task A');
+
+        $this->setUser($student);
+        $this->set_valid_sesskey();
+
+        $this->expectException(\required_capability_exception::class);
+        toggle_todolist_item::execute($itemid, $optionid, true);
+    }
+
+    /**
+     * Create a basic teacher-can-check setup.
+     *
+     * @return array
+     */
+    private function create_teachercancheck_setup(): array {
+        $course = $this->getDataGenerator()->create_course();
+        $teacher = $this->getDataGenerator()->create_user();
+        $this->getDataGenerator()->enrol_user($teacher->id, $course->id, 'editingteacher');
+
+        $this->setAdminUser();
+        $booking = $this->getDataGenerator()->create_module('booking', [
+            'course' => $course->id,
+            'name' => 'Booking for external tests',
+        ]);
+
+        /** @var mod_booking_generator $plugingenerator */
+        $plugingenerator = self::getDataGenerator()->get_plugin_generator('mod_booking');
+
+        $record = new stdClass();
+        $record->bookingid = (int)$booking->id;
+        $record->text = 'Option for external tests';
+        $record->description = 'Option description';
+        $record->courseid = (int)$course->id;
+        $record->chooseorcreatecourse = 1;
+        $record->optiondateid_0 = 0;
+        $record->daystonotify_0 = 0;
+        $record->coursestarttime_0 = time() + 3600;
+        $record->courseendtime_0 = time() + 7200;
+        $option = $plugingenerator->create_option($record);
+
+        $cm = get_coursemodule_from_instance('booking', (int)$booking->id, (int)$course->id, false, MUST_EXIST);
+        return [$teacher, (int)$option->id, (int)$booking->id, (int)$cm->id];
+    }
+
+    /**
+     * Create a teacher-can-check setup including a student without permission.
+     *
+     * @return array
+     */
+    private function create_teachercancheck_setup_with_student(): array {
+        [$teacher, $optionid, $bookingid, $cmid] = $this->create_teachercancheck_setup();
+        $courseid = (int)get_coursemodule_from_id('booking', $cmid)->course;
+        $student = $this->getDataGenerator()->create_user();
+        $this->getDataGenerator()->enrol_user($student->id, $courseid, 'student');
+        return [$teacher, $optionid, $bookingid, $cmid, $student];
+    }
+
+    /**
+     * Seed a single todolist item.
+     *
+     * @param int $optionid
+     * @param string $text
+     * @param int $status
+     * @param int $sortorder
+     * @return int
+     */
+    private function seed_single_item(int $optionid, string $text, int $status = 0, int $sortorder = 0): int {
+        global $DB;
+
+        $record = (object)[
+            'optionid' => $optionid,
+            'text' => $text,
+            'sortorder' => $sortorder,
+            'status' => $status,
+            'completed_by' => $status ? 2 : null,
+            'completed_at' => $status ? time() : null,
+            'created_by' => 2,
+            'created_at' => time(),
+        ];
+        return (int)$DB->insert_record('bookingextension_todolist_item', $record);
+    }
+
+    /**
+     * Populate request globals with the active session key.
+     *
+     * @return void
+     */
+    private function set_valid_sesskey(): void {
+        $_POST['sesskey'] = sesskey();
+        $_GET['sesskey'] = sesskey();
+    }
+}

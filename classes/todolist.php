@@ -24,6 +24,9 @@
 
 namespace bookingextension_todolist;
 
+use admin_setting_configcheckbox;
+use admin_setting_heading;
+use admin_settingpage;
 use context_module;
 use mod_booking\plugininfo\bookingextension;
 use mod_booking\plugininfo\bookingextension_interface;
@@ -52,7 +55,7 @@ class todolist extends bookingextension implements bookingextension_interface {
      * @return bool
      */
     public function contains_option_fields(): bool {
-        return true;
+        return self::is_globally_enabled();
     }
 
     /**
@@ -84,6 +87,82 @@ class todolist extends bookingextension implements bookingextension_interface {
     }
 
     /**
+     * Return history description for todolist-specific booking history entries.
+     *
+     * @param \stdClass $values booking history row values
+     * @param array $info decoded json payload
+     * @return string
+     */
+    public static function get_booking_history_description(\stdClass $values, array $info): string {
+        if (($info['component'] ?? '') !== 'bookingextension_todolist') {
+            return '';
+        }
+
+        try {
+            $action = (string)($info['action'] ?? '');
+            if ($action === 'toggle_todolist_item') {
+                $itemid = (int)($info['itemid'] ?? 0);
+                $checked = !empty($info['checked']);
+                $eventclass = $checked
+                    ? '\\bookingextension_todolist\\event\\todolist_item_checked'
+                    : '\\bookingextension_todolist\\event\\todolist_item_unchecked';
+                if (class_exists($eventclass)) {
+                    $event = $eventclass::create([
+                        'context' => context_module::instance((int)$values->cmid),
+                        'objectid' => $itemid,
+                        'relateduserid' => (int)($values->usermodified ?? 0),
+                        'other' => [
+                            'optionid' => (int)($values->optionid ?? 0),
+                            'itemtext' => self::resolve_history_item_text($itemid, $info),
+                            'checked' => (int)$checked,
+                        ],
+                    ]);
+                    return $event->get_description();
+                }
+            }
+
+            if ($action === 'todolist_completed') {
+                $eventclass = '\\bookingextension_todolist\\event\\todolist_completed';
+                if (class_exists($eventclass)) {
+                    $event = $eventclass::create([
+                        'context' => context_module::instance((int)$values->cmid),
+                        'objectid' => (int)($values->optionid ?? 0),
+                        'relateduserid' => (int)($values->usermodified ?? 0),
+                    ]);
+                    return $event->get_description();
+                }
+            }
+        } catch (\Throwable $e) {
+            return '';
+        }
+
+        return '';
+    }
+
+    /**
+     * Resolve the todo item text for booking history descriptions.
+     *
+     * @param int $itemid
+     * @param array $info
+     * @return string
+     */
+    private static function resolve_history_item_text(int $itemid, array $info): string {
+        global $DB;
+
+        $itemtext = trim((string)($info['itemtext'] ?? ''));
+        if ($itemtext !== '') {
+            return $itemtext;
+        }
+
+        if ($itemid <= 0) {
+            return '';
+        }
+
+        $record = $DB->get_record('bookingextension_todolist_item', ['id' => $itemid], 'text', IGNORE_MISSING);
+        return trim((string)($record->text ?? ''));
+    }
+
+    /**
      * Load plugin settings in site administration.
      *
      * @param \part_of_admin_tree $adminroot
@@ -92,7 +171,30 @@ class todolist extends bookingextension implements bookingextension_interface {
      * @return void
      */
     public function load_settings(\part_of_admin_tree $adminroot, $parentnodename, $hassiteconfig): void {
-        // No global settings required for v1.
+        $todolistsettings = new admin_settingpage(
+            'bookingextension_todolist_settings',
+            get_string('pluginname', 'bookingextension_todolist'),
+            'moodle/site:config'
+        );
+
+        $todolistsettings->add(
+            new admin_setting_heading(
+                'bookingextension_todolist',
+                get_string('todolist:heading', 'bookingextension_todolist'),
+                get_string('todolist:heading_desc', 'bookingextension_todolist')
+            )
+        );
+
+        $todolistsettings->add(
+            new admin_setting_configcheckbox(
+                'bookingextension_todolist/enableglobally',
+                get_string('todolist:enableglobally', 'bookingextension_todolist'),
+                get_string('todolist:enableglobally_desc', 'bookingextension_todolist'),
+                1
+            )
+        );
+
+        $adminroot->add('modbookingfolder', $todolistsettings);
     }
 
     /**
@@ -102,14 +204,9 @@ class todolist extends bookingextension implements bookingextension_interface {
      * @return object
      */
     public static function load_data_for_settings_singleton(int $optionid): object {
-        global $DB;
-
-        $json = (string)$DB->get_field('booking_options', 'json', ['id' => $optionid]);
-        $enabled = self::get_enabled_from_json($json);
-
         return (object)[
-            'items' => $DB->get_records('bookingextension_todolist_item', ['optionid' => $optionid], 'sortorder ASC, id ASC'),
-            'enabled' => $enabled,
+            'items' => todolist_helper::get_items_for_option($optionid),
+            'enabled' => 0,
         ];
     }
 
@@ -121,6 +218,10 @@ class todolist extends bookingextension implements bookingextension_interface {
      */
     public static function set_template_data_for_optionview(object $settings): array {
         global $OUTPUT, $PAGE;
+
+        if (!self::is_globally_enabled()) {
+            return [];
+        }
 
         $enabled = self::get_enabled_from_json((string)($settings->json ?? ''));
         if (empty($enabled)) {
@@ -165,5 +266,19 @@ class todolist extends bookingextension implements bookingextension_interface {
         }
 
         return (int)$jsonobject->enable_todolist;
+    }
+
+    /**
+     * Returns whether the extension is globally enabled in site settings.
+     *
+     * @return bool
+     */
+    private static function is_globally_enabled(): bool {
+        $enabled = get_config('bookingextension_todolist', 'enableglobally');
+        if ($enabled === false || $enabled === null) {
+            return true;
+        }
+
+        return !empty($enabled);
     }
 }

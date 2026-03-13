@@ -52,9 +52,14 @@ class todolist_item_unchecked extends base {
      * @return string
      */
     public function get_description(): string {
+        $itemtext = trim((string)($this->other['itemtext'] ?? ''));
+        if ($itemtext === '') {
+            $itemtext = '#' . (int)$this->objectid;
+        }
+
         $a = (object)[
             'userid' => (int)$this->relateduserid,
-            'itemid' => (int)$this->objectid,
+            'itemtext' => $itemtext,
             'optionid' => (int)($this->other['optionid'] ?? 0),
         ];
         return get_string('event:todolist_item_unchecked_desc', 'bookingextension_todolist', $a);

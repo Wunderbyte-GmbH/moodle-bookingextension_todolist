@@ -69,13 +69,6 @@ function xmldb_bookingextension_todolist_upgrade($oldversion) {
             $dbman->create_table($assignmenttable);
         }
 
-        $table = new xmldb_table('booking_options');
-        $field = new xmldb_field('todoliststatus', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'timemodified');
-
-        if (!$dbman->field_exists($table, $field)) {
-            $dbman->add_field($table, $field);
-        }
-
         upgrade_plugin_savepoint(true, 2026031301, 'bookingextension', 'todolist');
     }
 

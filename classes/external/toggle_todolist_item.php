@@ -16,17 +16,14 @@
 
 namespace bookingextension_todolist\external;
 
-use bookingextension_todolist\event\todolist_completed;
-use bookingextension_todolist\event\todolist_item_checked;
-use bookingextension_todolist\event\todolist_item_unchecked;
-use bookingextension_todolist\local\todolist_helper;
+use bookingextension_todolist\local\toggle_todolist_service;
 use context_module;
 use external_api;
 use external_function_parameters;
 use external_multiple_structure;
 use external_single_structure;
 use external_value;
-use mod_booking\booking_option;
+use mod_booking\singleton_service;
 
 defined('MOODLE_INTERNAL') || die();
 
@@ -62,7 +59,7 @@ class toggle_todolist_item extends external_api {
      * @return array
      */
     public static function execute(int $itemid, int $optionid, bool $checked): array {
-        global $DB, $USER;
+        global $USER;
 
         $params = self::validate_parameters(self::execute_parameters(), [
             'itemid' => $itemid,
@@ -72,7 +69,7 @@ class toggle_todolist_item extends external_api {
 
         require_sesskey();
 
-        $settings = \mod_booking\singleton_service::get_instance_of_booking_option_settings((int)$params['optionid']);
+        $settings = singleton_service::get_instance_of_booking_option_settings((int)$params['optionid']);
         $context = context_module::instance((int)$settings->cmid);
         self::validate_context($context);
 
@@ -82,93 +79,15 @@ class toggle_todolist_item extends external_api {
             throw new \required_capability_exception($context, 'bookingextension/todolist:checktodolist', 'nopermissions', '');
         }
 
-        $record = $DB->get_record('bookingextension_todolist_item', [
-            'id' => (int)$params['itemid'],
-            'optionid' => (int)$params['optionid'],
-        ], '*', MUST_EXIST);
-
-        $wascompleted = todolist_helper::todolist_completed((int)$params['optionid']);
-
-        $record->status = $params['checked'] ? 1 : 0;
-        $record->completed_by = $params['checked'] ? (int)$USER->id : null;
-        $record->completed_at = $params['checked'] ? time() : null;
-        $DB->update_record('bookingextension_todolist_item', $record);
-
-        todolist_helper::refresh_option_todolist_status((int)$params['optionid']);
-        $iscompleted = todolist_helper::todolist_completed((int)$params['optionid']);
-
-        booking_option::booking_history_insert(
-            MOD_BOOKING_STATUSPARAM_COMPLETION_CHANGED,
-            0,
+        return toggle_todolist_service::toggle_item(
+            (int)$params['itemid'],
             (int)$params['optionid'],
-            (int)$settings->bookingid,
+            (bool)$params['checked'],
+            $context,
             (int)$USER->id,
-            [
-                'component' => 'bookingextension_todolist',
-                'action' => 'toggle_todolist_item',
-                'itemid' => (int)$params['itemid'],
-                'checked' => (int)$params['checked'],
-            ]
-        );
-
-        if (!empty($params['checked'])) {
-            $event = todolist_item_checked::create([
-                'context' => $context,
-                'objectid' => (int)$params['itemid'],
-                'relateduserid' => (int)$USER->id,
-                'other' => [
-                    'optionid' => (int)$params['optionid'],
-                    'checked' => 1,
-                ],
-            ]);
-            $event->trigger();
-        } else {
-            $event = todolist_item_unchecked::create([
-                'context' => $context,
-                'objectid' => (int)$params['itemid'],
-                'relateduserid' => (int)$USER->id,
-                'other' => [
-                    'optionid' => (int)$params['optionid'],
-                ],
-            ]);
-            $event->trigger();
-        }
-
-        if (!$wascompleted && $iscompleted) {
-            $completedevent = todolist_completed::create([
-                'context' => $context,
-                'objectid' => (int)$params['optionid'],
-                'relateduserid' => (int)$USER->id,
-            ]);
-            $completedevent->trigger();
-        }
-
-        $templatecontext = todolist_helper::get_template_context(
-            (int)$params['optionid'],
-            true,
+            (int)$settings->bookingid,
             (int)$settings->cmid
         );
-
-        $notification = '';
-        $notificationtype = '';
-        if (!empty($params['checked'])) {
-            if (!$wascompleted && $iscompleted) {
-                $notification = get_string('notification_todolist_completed', 'bookingextension_todolist');
-            } else {
-                $notification = get_string('notification_item_checked', 'bookingextension_todolist');
-            }
-            $notificationtype = 'success';
-        } else {
-            $notification = get_string('notification_item_unchecked', 'bookingextension_todolist');
-            $notificationtype = 'info';
-        }
-
-        return [
-            'status' => 1,
-            'notification' => $notification,
-            'notificationtype' => $notificationtype,
-            'context' => $templatecontext,
-        ];
     }
 
     /**
@@ -180,7 +99,12 @@ class toggle_todolist_item extends external_api {
         return new external_single_structure([
             'status' => new external_value(PARAM_INT, 'Status flag'),
             'notification' => new external_value(PARAM_TEXT, 'Notification message to display', VALUE_OPTIONAL, ''),
-            'notificationtype' => new external_value(PARAM_ALPHA, 'Notification type (success, info, warning, error)', VALUE_OPTIONAL, ''),
+            'notificationtype' => new external_value(
+                PARAM_ALPHA,
+                'Notification type (success, info, warning, error)',
+                VALUE_OPTIONAL,
+                ''
+            ),
             'context' => new external_single_structure([
                 'cmid' => new external_value(PARAM_INT, 'Course module id'),
                 'optionid' => new external_value(PARAM_INT, 'Booking option id'),

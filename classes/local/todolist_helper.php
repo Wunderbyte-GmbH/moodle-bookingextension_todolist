@@ -16,7 +16,7 @@
 
 namespace bookingextension_todolist\local;
 
-use mod_booking\booking_option;
+use mod_booking\singleton_service;
 
 /**
  * Helper methods for todo list logic.
@@ -101,20 +101,20 @@ class todolist_helper {
     }
 
     /**
-     * Sync booking_options.todoliststatus with item completion state.
+     * Keep compatibility hook used by save/toggle flows.
+     *
+     * Todo list completion is now derived directly from item records
+     * (no persisted column on booking_options).
      *
      * @param int $optionid
      * @return void
      */
     public static function refresh_option_todolist_status(int $optionid): void {
-        global $DB;
-
-        $status = self::todolist_completed($optionid) ? 1 : 0;
-        $DB->set_field('booking_options', 'todoliststatus', $status, ['id' => $optionid]);
+        // Intentionally left blank: status is computed on demand.
     }
 
     /**
-     * Save textarea list by replacing all existing records.
+     * Save textarea list by preserving unchanged rows and applying minimal changes.
      *
      * @param int $optionid
      * @param array $lines
@@ -124,14 +124,148 @@ class todolist_helper {
     public static function replace_items(int $optionid, array $lines, int $userid): void {
         global $DB;
 
-        $DB->delete_records('bookingextension_todolist_item', ['optionid' => $optionid]);
+        $existingrecords = array_values(self::get_items_for_option($optionid));
+        $existingtexts = self::texts_from_records($existingrecords);
+        $linecount = count($lines);
 
+        // Find unchanged items in order and keep those DB rows untouched except sortorder.
+        $anchors = self::build_lcs_anchors($existingtexts, $lines);
+
+        $handledold = [];
         $time = time();
-        foreach ($lines as $index => $line) {
+        $prevoldanchor = -1;
+        $prevnewanchor = -1;
+
+        foreach ($anchors as $anchor) {
+            $oldanchor = (int)$anchor['old'];
+            $newanchor = (int)$anchor['new'];
+
+            self::sync_unanchored_segment(
+                $existingrecords,
+                $lines,
+                $optionid,
+                $userid,
+                $time,
+                $prevoldanchor + 1,
+                $oldanchor - 1,
+                $prevnewanchor + 1,
+                $newanchor - 1,
+                $handledold
+            );
+
+            $anchoredrecord = $existingrecords[$oldanchor];
+            if ((int)$anchoredrecord->sortorder !== $newanchor) {
+                $anchoredrecord->sortorder = $newanchor;
+                $DB->update_record('bookingextension_todolist_item', $anchoredrecord);
+            }
+            $handledold[$oldanchor] = true;
+
+            $prevoldanchor = $oldanchor;
+            $prevnewanchor = $newanchor;
+        }
+
+        self::sync_unanchored_segment(
+            $existingrecords,
+            $lines,
+            $optionid,
+            $userid,
+            $time,
+            $prevoldanchor + 1,
+            count($existingrecords) - 1,
+            $prevnewanchor + 1,
+            $linecount - 1,
+            $handledold
+        );
+
+        self::refresh_option_todolist_status($optionid);
+    }
+
+    /**
+     * Synchronize one unmatched segment between two kept anchors.
+     *
+     * @param array $existingrecords
+     * @param array $lines
+     * @param int $optionid
+     * @param int $userid
+     * @param int $time
+     * @param int $oldstart
+     * @param int $oldend
+     * @param int $newstart
+     * @param int $newend
+     * @param array $handledold
+     * @return void
+     */
+    private static function sync_unanchored_segment(
+        array $existingrecords,
+        array $lines,
+        int $optionid,
+        int $userid,
+        int $time,
+        int $oldstart,
+        int $oldend,
+        int $newstart,
+        int $newend,
+        array &$handledold
+    ): void {
+        global $DB;
+
+        $oldindexes = [];
+        if ($oldstart <= $oldend) {
+            for ($i = $oldstart; $i <= $oldend; $i++) {
+                $oldindexes[] = $i;
+            }
+        }
+
+        $newindexes = [];
+        if ($newstart <= $newend) {
+            for ($i = $newstart; $i <= $newend; $i++) {
+                $newindexes[] = $i;
+            }
+        }
+
+        $shared = min(count($oldindexes), count($newindexes));
+
+        // Reuse existing rows first: update text when needed and always set new sortorder.
+        for ($i = 0; $i < $shared; $i++) {
+            $oldidx = $oldindexes[$i];
+            $newidx = $newindexes[$i];
+            $record = $existingrecords[$oldidx];
+            $newtext = $lines[$newidx];
+
+            $changed = false;
+            if (trim((string)$record->text) !== $newtext) {
+                $record->text = $newtext;
+                $record->status = 0;
+                $record->completed_by = null;
+                $record->completed_at = null;
+                $changed = true;
+            }
+            if ((int)$record->sortorder !== $newidx) {
+                $record->sortorder = $newidx;
+                $changed = true;
+            }
+
+            if ($changed) {
+                $DB->update_record('bookingextension_todolist_item', $record);
+            }
+            $handledold[$oldidx] = true;
+        }
+
+        // Remove leftover old rows in this segment.
+        for ($i = $shared; $i < count($oldindexes); $i++) {
+            $oldidx = $oldindexes[$i];
+            $record = $existingrecords[$oldidx];
+            $DB->delete_records('bookingextension_todolist_item', ['id' => (int)$record->id]);
+            $handledold[$oldidx] = true;
+        }
+
+        // Insert additional new rows for this segment.
+        for ($i = $shared; $i < count($newindexes); $i++) {
+            $newidx = $newindexes[$i];
             $record = (object)[
                 'optionid' => $optionid,
-                'text' => $line,
-                'sortorder' => $index,
+                'text' => $lines[$newidx],
+                'sortorder' => $newidx,
                 'status' => 0,
                 'completed_by' => null,
                 'completed_at' => null,
@@ -140,8 +274,49 @@ class todolist_helper {
             ];
             $DB->insert_record('bookingextension_todolist_item', $record);
         }
+    }
 
-        self::refresh_option_todolist_status($optionid);
+    /**
+     * Build list of unchanged anchors (old index + new index) using LCS.
+     *
+     * @param array $oldtexts
+     * @param array $newtexts
+     * @return array
+     */
+    private static function build_lcs_anchors(array $oldtexts, array $newtexts): array {
+        $n = count($oldtexts);
+        $m = count($newtexts);
+        $dp = array_fill(0, $n + 1, array_fill(0, $m + 1, 0));
+
+        for ($i = $n - 1; $i >= 0; $i--) {
+            for ($j = $m - 1; $j >= 0; $j--) {
+                if ($oldtexts[$i] === $newtexts[$j]) {
+                    $dp[$i][$j] = $dp[$i + 1][$j + 1] + 1;
+                } else {
+                    $dp[$i][$j] = max($dp[$i + 1][$j], $dp[$i][$j + 1]);
+                }
+            }
+        }
+
+        $anchors = [];
+        $i = 0;
+        $j = 0;
+        while ($i < $n && $j < $m) {
+            if ($oldtexts[$i] === $newtexts[$j]) {
+                $anchors[] = ['old' => $i, 'new' => $j];
+                $i++;
+                $j++;
+                continue;
+            }
+
+            if ($dp[$i + 1][$j] >= $dp[$i][$j + 1]) {
+                $i++;
+            } else {
+                $j++;
+            }
+        }
+
+        return $anchors;
     }
 
     /**
@@ -207,6 +382,17 @@ class todolist_helper {
      * @return bool
      */
     public static function is_enabled_for_option(int $optionid): bool {
-        return (bool)booking_option::get_value_of_json_by_key($optionid, 'enable_todolist');
+        $settings = singleton_service::get_instance_of_booking_option_settings($optionid);
+        $json = (string)($settings->json ?? '');
+        if ($json === '') {
+            return false;
+        }
+
+        $jsonobject = json_decode($json);
+        if (!is_object($jsonobject) || !isset($jsonobject->enable_todolist)) {
+            return false;
+        }
+
+        return !empty($jsonobject->enable_todolist);
     }
 }

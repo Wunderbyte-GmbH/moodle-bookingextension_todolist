@@ -75,6 +75,9 @@ class todolist extends field_base {
         int $updateparam,
         $returnvalue = null
     ): array {
+        if (get_config(self::$subplugin, 'enableglobally') == 0) {
+            return [];
+        }
         booking_option::add_data_to_json($newoption, 'enable_todolist', !empty($formdata->enable_todolist) ? 1 : 0);
         return [];
     }
@@ -96,6 +99,11 @@ class todolist extends field_base {
         $fieldstoinstanciate = [],
         $applyheader = true
     ): void {
+
+        if (get_config(self::$subplugin, 'enableglobally') == 0) {
+            return;
+        }
+
         if (!empty($formdata['cmid'])) {
             $context = context_module::instance((int)$formdata['cmid']);
             if (!has_capability('bookingextension/todolist:edittodolist', $context)) {
@@ -149,6 +157,11 @@ class todolist extends field_base {
      * @return void
      */
     public static function set_data(stdClass &$data, booking_option_settings $settings): void {
+
+        if (get_config(self::$subplugin, 'enableglobally') == 0) {
+            return;
+        }
+
         $optionid = (int)($data->id ?? $settings->id ?? 0);
         $json = (string)($settings->json ?? '');
         $jsonobject = json_decode($json);
@@ -211,6 +224,10 @@ class todolist extends field_base {
      */
     public static function save_data(stdClass &$formdata, stdClass &$option): array {
         global $USER;
+
+        if (get_config(self::$subplugin, 'enableglobally') == 0) {
+            return [];
+        }
 
         if (!empty($formdata->cmid)) {
             $context = context_module::instance((int)$formdata->cmid);
