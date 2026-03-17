@@ -162,20 +162,25 @@ class todolist extends field_base {
             return;
         }
 
-        $optionid = (int)($data->id ?? $settings->id ?? 0);
-        $json = (string)($settings->json ?? '');
-        $jsonobject = json_decode($json);
+        if ($data->importing && !empty($data->todolist)) {
+            $data->todolist_reset_completed_confirmation = 1;
+            $data->enable_todolist = 1;
+            $lines = explode(',', $data->todolist);
+        } else {
+            $optionid = (int)($data->id ?? $settings->id ?? 0);
+            $json = (string)($settings->json ?? '');
+            $jsonobject = json_decode($json);
 
-        $data->enable_todolist = (int)($jsonobject->enable_todolist ?? 0);
+            $data->enable_todolist = (int)($jsonobject->enable_todolist ?? 0);
 
-        $items = todolist_helper::get_items_for_option($optionid);
-        $lines = [];
-        foreach ($items as $item) {
-            $lines[] = (string)$item->text;
+            $items = todolist_helper::get_items_for_option($optionid);
+            $lines = [];
+            foreach ($items as $item) {
+                $lines[] = (string)$item->text;
+            }
+            $data->todolist_reset_completed_confirmation = 0;
         }
-
         $data->todolist_items = implode(PHP_EOL, $lines);
-        $data->todolist_reset_completed_confirmation = 0;
     }
 
     /**
@@ -254,7 +259,6 @@ class todolist extends field_base {
         } else {
             todolist_helper::refresh_option_todolist_status($optionid);
         }
-
         return [];
     }
 }
