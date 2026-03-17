@@ -19,7 +19,6 @@ namespace bookingextension_todolist;
 use advanced_testcase;
 use bookingextension_todolist\external\toggle_todolist_item;
 use bookingextension_todolist\local\todolist_helper;
-use context_module;
 use mod_booking\singleton_service;
 use mod_booking_generator;
 use stdClass;
@@ -38,6 +37,7 @@ use stdClass;
 final class toggle_todolist_item_external_test extends advanced_testcase {
     protected function setUp(): void {
         parent::setUp();
+        $this->preventResetByRollback();
         $this->resetAfterTest();
     }
 
@@ -52,8 +52,8 @@ final class toggle_todolist_item_external_test extends advanced_testcase {
     public function test_execute_checks_item_and_returns_success_notification(): void {
         global $DB;
 
-        [$teacher, $optionid] = $this->create_teachercancheck_setup();
-        $itemid = $this->seed_single_item($optionid, 'Task A');
+        [$teacher, $optionid] = $this->create_teachercancheck_setup(['Task A']);
+        $itemid = $this->get_todolist_item_id($optionid, 'Task A');
 
         $this->setUser($teacher);
         $this->set_valid_sesskey();
@@ -74,8 +74,9 @@ final class toggle_todolist_item_external_test extends advanced_testcase {
     public function test_execute_unchecks_item_and_returns_info_notification(): void {
         global $DB;
 
-        [$teacher, $optionid] = $this->create_teachercancheck_setup();
-        $itemid = $this->seed_single_item($optionid, 'Task A', 1);
+        [$teacher, $optionid] = $this->create_teachercancheck_setup(['Task A']);
+        $itemid = $this->get_todolist_item_id($optionid, 'Task A');
+        $this->set_todolist_item_status($itemid, 1);
 
         $this->setUser($teacher);
         $this->set_valid_sesskey();
@@ -93,9 +94,10 @@ final class toggle_todolist_item_external_test extends advanced_testcase {
     public function test_execute_on_last_item_triggers_completed_history_entry(): void {
         global $DB;
 
-        [$teacher, $optionid, $bookingid] = $this->create_teachercancheck_setup();
-        $firstitemid = $this->seed_single_item($optionid, 'Task A', 1);
-        $seconditemid = $this->seed_single_item($optionid, 'Task B', 0, 1);
+        [$teacher, $optionid, $bookingid] = $this->create_teachercancheck_setup(['Task A', 'Task B']);
+        $firstitemid = $this->get_todolist_item_id($optionid, 'Task A');
+        $seconditemid = $this->get_todolist_item_id($optionid, 'Task B');
+        $this->set_todolist_item_status($firstitemid, 1);
 
         $this->setUser($teacher);
         $this->set_valid_sesskey();
@@ -118,8 +120,8 @@ final class toggle_todolist_item_external_test extends advanced_testcase {
     }
 
     public function test_history_description_uses_real_item_text(): void {
-        [$teacher, $optionid, , $cmid] = $this->create_teachercancheck_setup();
-        $itemid = $this->seed_single_item($optionid, 'prepare classroom');
+        [$teacher, $optionid, , $cmid] = $this->create_teachercancheck_setup(['prepare classroom']);
+        $itemid = $this->get_todolist_item_id($optionid, 'prepare classroom');
 
         $values = (object)[
             'cmid' => $cmid,
@@ -150,8 +152,8 @@ final class toggle_todolist_item_external_test extends advanced_testcase {
     }
 
     public function test_execute_throws_for_user_without_capability(): void {
-        [$teacher, $optionid, $bookingid, $cmid, $student] = $this->create_teachercancheck_setup_with_student();
-        $itemid = $this->seed_single_item($optionid, 'Task A');
+        [$teacher, $optionid, $bookingid, $cmid, $student] = $this->create_teachercancheck_setup_with_student(['Task A']);
+        $itemid = $this->get_todolist_item_id($optionid, 'Task A');
 
         $this->setUser($student);
         $this->set_valid_sesskey();
@@ -165,7 +167,7 @@ final class toggle_todolist_item_external_test extends advanced_testcase {
      *
      * @return array
      */
-    private function create_teachercancheck_setup(): array {
+    private function create_teachercancheck_setup(array $todolistitems = ['Task A', 'Task B']): array {
         $course = $this->getDataGenerator()->create_course();
         $teacher = $this->getDataGenerator()->create_user();
         $this->getDataGenerator()->enrol_user($teacher->id, $course->id, 'editingteacher');
@@ -191,6 +193,15 @@ final class toggle_todolist_item_external_test extends advanced_testcase {
         $record->courseendtime_0 = time() + 7200;
         $option = $plugingenerator->create_option($record);
 
+        $record->id = (int)$option->id;
+        $record->cmid = (int)$option->cmid;
+        $record->enable_todolist = 1;
+        $record->todolist_items = implode(PHP_EOL, $todolistitems);
+
+        $boinstance = singleton_service::get_instance_of_booking_option($option->cmid, $option->id);
+        $boinstance::update($record);
+        singleton_service::destroy_booking_option_singleton($option->id);
+
         $cm = get_coursemodule_from_instance('booking', (int)$booking->id, (int)$course->id, false, MUST_EXIST);
         return [$teacher, (int)$option->id, (int)$booking->id, (int)$cm->id];
     }
@@ -200,8 +211,8 @@ final class toggle_todolist_item_external_test extends advanced_testcase {
      *
      * @return array
      */
-    private function create_teachercancheck_setup_with_student(): array {
-        [$teacher, $optionid, $bookingid, $cmid] = $this->create_teachercancheck_setup();
+    private function create_teachercancheck_setup_with_student(array $todolistitems = ['Task A', 'Task B']): array {
+        [$teacher, $optionid, $bookingid, $cmid] = $this->create_teachercancheck_setup($todolistitems);
         $courseid = (int)get_coursemodule_from_id('booking', $cmid)->course;
         $student = $this->getDataGenerator()->create_user();
         $this->getDataGenerator()->enrol_user($student->id, $courseid, 'student');
@@ -209,28 +220,40 @@ final class toggle_todolist_item_external_test extends advanced_testcase {
     }
 
     /**
-     * Seed a single todolist item.
+     * Return a todolist item id for an option by text.
      *
      * @param int $optionid
      * @param string $text
-     * @param int $status
-     * @param int $sortorder
      * @return int
      */
-    private function seed_single_item(int $optionid, string $text, int $status = 0, int $sortorder = 0): int {
+    private function get_todolist_item_id(int $optionid, string $text): int {
+        $items = todolist_helper::get_items_for_option($optionid);
+        foreach ($items as $item) {
+            if ((string)$item->text === $text) {
+                return (int)$item->id;
+            }
+        }
+        $this->fail('Failed to find todolist item with text: ' . $text);
+        return 0;
+    }
+
+    /**
+     * Set todolist completion state for an existing item.
+     *
+     * @param int $itemid
+     * @param int $status
+     * @return void
+     */
+    private function set_todolist_item_status(int $itemid, int $status): void {
         global $DB;
 
         $record = (object)[
-            'optionid' => $optionid,
-            'text' => $text,
-            'sortorder' => $sortorder,
+            'id' => $itemid,
             'status' => $status,
             'completed_by' => $status ? 2 : null,
             'completed_at' => $status ? time() : null,
-            'created_by' => 2,
-            'created_at' => time(),
         ];
-        return (int)$DB->insert_record('bookingextension_todolist_item', $record);
+        $DB->update_record('bookingextension_todolist_item', $record);
     }
 
     /**
