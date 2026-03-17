@@ -22,6 +22,7 @@
  * @license     http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
+
 $string['bookingextension/todolist:checktodolist'] = 'Mark todo list items as completed';
 $string['bookingextension/todolist:edittodolist'] = 'Edit todo list in booking option form';
 $string['bookingextension/todolist:viewtodolist'] = 'View todo list on booking option view';
@@ -46,10 +47,13 @@ $string['ruledaysbeforetodoliststatus_completed'] = 'Only options with completed
 $string['ruledaysbeforetodoliststatus_ignore'] = 'Ignore todo list status';
 $string['ruledaysbeforetodoliststatus_not_completed'] = 'Only options with incomplete todo list';
 $string['todolist'] = 'Todo list';
+$string['todolist:checktodolist'] = 'Mark todo list items as completed';
+$string['todolist:edittodolist'] = 'Edit todo list in booking option form';
 $string['todolist:enableglobally'] = 'Enable todo list extension';
 $string['todolist:enableglobally_desc'] = 'Turn the todo list booking extension on or off for the whole site.';
 $string['todolist:heading'] = 'Todo list extension';
 $string['todolist:heading_desc'] = 'Skeleton settings section for the Todo list booking extension.';
+$string['todolist:viewtodolist'] = 'View todo list on booking option view';
 $string['todolist_empty'] = 'No todo items configured.';
 $string['todolist_items'] = 'Todo list';
 $string['todolist_items_desc'] = 'Enter one todo item per line.';
