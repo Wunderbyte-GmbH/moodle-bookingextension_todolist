@@ -162,7 +162,7 @@ class todolist extends field_base {
             return;
         }
 
-        if ($data->importing && !empty($data->todolist)) {
+        if (isset($data->importing) && !empty($data->todolist)) {
             $data->todolist_reset_completed_confirmation = 1;
             $data->enable_todolist = 1;
             $lines = explode(',', $data->todolist);
