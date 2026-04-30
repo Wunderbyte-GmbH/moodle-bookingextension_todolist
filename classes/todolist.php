@@ -228,6 +228,10 @@ class todolist extends bookingextension implements bookingextension_interface {
             return [];
         }
 
+        if (empty($settings->cmid)) {
+            return [];
+        }
+
         $context = context_module::instance((int)$settings->cmid);
         if (!has_capability('bookingextension/todolist:viewtodolist', $context)) {
             return [];

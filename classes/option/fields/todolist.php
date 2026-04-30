@@ -162,10 +162,30 @@ class todolist extends field_base {
             return;
         }
 
-        if (isset($data->importing) && !empty($data->todolist)) {
+        if (!empty($data->importing)) {
+            // Import path: caller supplies enable_todolist (0/1) and todolist_items
+            // (newline-separated item texts) directly in $data.  Both fields are optional;
+            // when absent the stored values are used as fall-back so that a partial import
+            // does not accidentally wipe an existing todo list.
+            $optionid = (int)($data->id ?? $settings->id ?? 0);
+            $json = (string)($settings->json ?? '');
+            $jsonobject = json_decode($json);
+
+            if (!isset($data->enable_todolist)) {
+                $data->enable_todolist = (int)($jsonobject->enable_todolist ?? 0);
+            }
+
+            if (!isset($data->todolist_items)) {
+                // Fall back to whatever is already stored.
+                $items = todolist_helper::get_items_for_option($optionid);
+                $lines = [];
+                foreach ($items as $item) {
+                    $lines[] = (string)$item->text;
+                }
+                $data->todolist_items = implode(PHP_EOL, $lines);
+            }
+
             $data->todolist_reset_completed_confirmation = 1;
-            $data->enable_todolist = 1;
-            $lines = explode(',', $data->todolist);
         } else {
             $optionid = (int)($data->id ?? $settings->id ?? 0);
             $json = (string)($settings->json ?? '');
@@ -179,8 +199,8 @@ class todolist extends field_base {
                 $lines[] = (string)$item->text;
             }
             $data->todolist_reset_completed_confirmation = 0;
+            $data->todolist_items = implode(PHP_EOL, $lines);
         }
-        $data->todolist_items = implode(PHP_EOL, $lines);
     }
 
     /**
