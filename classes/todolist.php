@@ -37,7 +37,7 @@ defined('MOODLE_INTERNAL') || die();
 require_once($CFG->dirroot . '/mod/booking/bookingextension/todolist/lib.php');
 
 /**
- * Skeleton booking extension implementation.
+ * Todo list booking extension: adds a checklist to booking options.
  */
 class todolist extends bookingextension implements bookingextension_interface {
     /**
